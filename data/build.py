@@ -15,9 +15,10 @@ from timm.data import Mixup
 from timm.data import create_transform
 from timm.data.transforms import _pil_interp
 
+from .image_folder_paths import ImageFolderWithPaths
 from .cached_image_folder import CachedImageFolder
 from .samplers import SubsetRandomSampler
-
+    
 
 def build_loader(config):
     config.defrost()
@@ -87,12 +88,13 @@ def build_dataset(is_train, config):
             )
         else:
             root = os.path.join(config.DATA.DATA_PATH, prefix)
-            dataset = datasets.ImageFolder(root, transform=transform)
-        nb_classes = 1000
+            # dataset = datasets.ImageFolder(root, transform=transform)
+            dataset = ImageFolderWithPaths(root, transform=transform)
+        nb_classes = 10
     elif config.DATA.DATASET == 'imagewoof':
         prefix = 'train' if is_train else 'val'
         root = os.path.join(config.DATA.DATA_PATH, prefix)
-        dataset = datasets.ImageFolder(root, transform=transform)
+        dataset = ImageFolderWithPaths(root, transform=transform)
         nb_classes = 10
     else:
         raise NotImplementedError("We only support ImageNet Now.")
@@ -138,3 +140,5 @@ def build_transform(is_train, config):
     t.append(transforms.ToTensor())
     t.append(transforms.Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD))
     return transforms.Compose(t)
+
+

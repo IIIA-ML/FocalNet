@@ -10,6 +10,8 @@ import time
 import argparse
 import datetime
 import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
 
 import torch
 import torch.backends.cudnn as cudnn
@@ -25,6 +27,9 @@ from lr_scheduler import build_scheduler
 from optimizer import build_optimizer
 from logger import create_logger
 from utils import load_checkpoint, save_checkpoint, get_grad_norm, auto_resume_helper, reduce_tensor
+
+import warnings
+warnings.filterwarnings("ignore")
 
 try:
     # noinspection PyUnresolvedReferences
@@ -134,15 +139,22 @@ def main(config):
         return
 
     logger.info("Start training")
+    tr_losses = []
+    # tr_acc = []
+    accuracies = []
+    losses = []
     start_time = time.time()
     for epoch in range(config.TRAIN.START_EPOCH, config.TRAIN.EPOCHS):
         data_loader_train.sampler.set_epoch(epoch)
 
-        train_one_epoch(config, model, criterion, data_loader_train, optimizer, epoch, mixup_fn, lr_scheduler)
+        train_one_epoch(config, model, criterion, data_loader_train, optimizer, epoch, mixup_fn, lr_scheduler, tr_losses)
         if dist.get_rank() == 0 and (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
             save_checkpoint(config, epoch, model_without_ddp, max_accuracy, optimizer, lr_scheduler, logger)
 
         acc1, acc5, loss = validate(config, data_loader_val, model)
+        accuracies.append(acc1)
+        losses.append(loss)
+        print(f'Acc@1 {acc1:.4f} - Loss {loss:.4f}')
         logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
         max_accuracy = max(max_accuracy, acc1)
         logger.info(f'Max accuracy: {max_accuracy:.2f}%')
@@ -150,9 +162,33 @@ def main(config):
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     logger.info('Training time {}'.format(total_time_str))
+    
+    """
+    plt.title('Cross-Entropy Loss', fontsize=24)
+    plt.rcParams['figure.dpi'] = 300
+    plt.figsize=(15,8)
+    plt.plot(list(range(0, config.TRAIN.EPOCHS-1)), tr_losses, '.-', label='training')
+    plt.plot(list(range(0, config.TRAIN.EPOCHS-1)), losses, '.-', label='validation')
+    plt.xlabel('epochs', fontsize=24)
+    plt.ylabel('loss', fontsize=24)
+    plt.legend()
+    # plt.savefig('img/loss.png')
+    plt.close()
+
+    
+    plt.title('Accuracy', fontsize=24)
+    plt.rcParams['figure.dpi'] = 300
+    plt.figsize=(15,8)
+    plt.plot(list(range(0, config.TRAIN.EPOCHS-1)), accuracies, '.-', label='validation')
+    plt.xlabel('epochs', fontsize=24)
+    plt.ylabel('acc@1', fontsize=24)
+    plt.legend()
+    # plt.savefig('img/acc@1.png')
+    plt.close()
+    """
 
 
-def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mixup_fn, lr_scheduler):
+def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mixup_fn, lr_scheduler, tr_losses):
     model.train()
     optimizer.zero_grad()
 
@@ -160,10 +196,11 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
     batch_time = AverageMeter()
     loss_meter = AverageMeter()
     norm_meter = AverageMeter()
+    # acc1_meter = AverageMeter()  # to test
 
     start = time.time()
     end = time.time()
-    for idx, (samples, targets) in enumerate(data_loader):
+    for idx, (samples, targets, paths) in enumerate(data_loader):
         samples = samples.cuda(non_blocking=True)
         targets = targets.cuda(non_blocking=True)
 
@@ -195,6 +232,8 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
         else:
             loss = criterion(outputs, targets)
             optimizer.zero_grad()
+            #acc1, acc5 = accuracy(outputs, targets, topk=(1, 5)) # to test
+            #acc1 = reduce_tensor(acc1)  # to test
             if config.AMP_OPT_LEVEL != "O0":
                 with amp.scale_loss(loss, optimizer) as scaled_loss:
                     scaled_loss.backward()
@@ -215,6 +254,8 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
         torch.cuda.synchronize()
 
         loss_meter.update(loss.item(), targets.size(0))
+        # acc1_meter.update(acc1.item(), targets.size(0))  # to test
+        #print(f'loss {loss_meter.val:.4f}')
         norm_meter.update(grad_norm)
         batch_time.update(time.time() - end)
         end = time.time()
@@ -232,6 +273,8 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
                 f'mem {memory_used:.0f}MB')
     epoch_time = time.time() - start
     logger.info(f"EPOCH {epoch} training takes {datetime.timedelta(seconds=int(epoch_time))}")
+    tr_losses.append(loss_meter.avg)
+    # tr_acc.append(acc1_meter.avg)  # to test
 
 
 @torch.no_grad()
@@ -245,12 +288,30 @@ def validate(config, data_loader, model):
     acc5_meter = AverageMeter()
 
     end = time.time()
-    for idx, (images, target) in enumerate(data_loader):
+    
+    pred = []
+    predictions = []
+    truth = []
+    imgs = []
+    
+    for idx, (images, target, path) in enumerate(data_loader):
+        
         images = images.cuda(non_blocking=True)
         target = target.cuda(non_blocking=True)
-
+        
         # compute output
         output = model(images)
+        out = output.cpu().detach().numpy()
+
+        batch_size = images.shape[0]
+        for i in range(batch_size):
+            
+            # save all the interesting values
+            imgs.append(path[i])
+            predictions.append(out[i])
+            pred.append(np.argmax(out[i]))
+            truth.append(target[i].item())
+
         # measure accuracy and record loss
         loss = criterion(output, target)
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
@@ -277,6 +338,9 @@ def validate(config, data_loader, model):
                 f'Acc@5 {acc5_meter.val:.3f} ({acc5_meter.avg:.3f})\t'
                 f'Mem {memory_used:.0f}MB')
     logger.info(f' * Acc@1 {acc1_meter.avg:.3f} Acc@5 {acc5_meter.avg:.3f}')
+    
+    df = pd.DataFrame(list(zip(imgs, truth, pred, predictions)), columns=['name', 'target', 'best prediction', 'predictions'])
+    df.to_csv('mapillary_eval.csv', index=False)
     
     return acc1_meter.avg, acc5_meter.avg, loss_meter.avg
 
