@@ -90,12 +90,12 @@ def build_dataset(is_train, config):
             root = os.path.join(config.DATA.DATA_PATH, prefix)
             # dataset = datasets.ImageFolder(root, transform=transform)
             dataset = ImageFolderWithPaths(root, transform=transform)
-        nb_classes = 10
+        nb_classes = config.MODEL.NUM_CLASSES
     elif config.DATA.DATASET == 'imagewoof':
         prefix = 'train' if is_train else 'val'
         root = os.path.join(config.DATA.DATA_PATH, prefix)
         dataset = ImageFolderWithPaths(root, transform=transform)
-        nb_classes = 10
+        nb_classes = config.MODEL.NUM_CLASSES
     else:
         raise NotImplementedError("We only support ImageNet Now.")
 

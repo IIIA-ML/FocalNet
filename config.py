@@ -169,8 +169,6 @@ _C.PRINT_FREQ = 100
 _C.SEED = 0
 # Perform evaluation only, overwritten by command line argument
 _C.EVAL_MODE = False
-# Perform evaluation of a single image
-# _C.TEST_IMAGE = True
 # Test throughput only, overwritten by command line argument
 _C.THROUGHPUT_MODE = False
 # Debug only so that skip dataloader initialization, overwritten by command line argument
